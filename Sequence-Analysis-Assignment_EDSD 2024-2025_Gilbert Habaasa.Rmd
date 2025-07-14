@@ -1,0 +1,184 @@
+---
+title: "EDSD 2024-2025 Sequence Analysis Assignment"
+author: "Gilbert Habaasa"
+date: "2025-07-05"
+output:
+  word_document: default
+  html_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+
+```
+
+#Instructor: Nicola Barban
+
+##Assignment
+Use the data provided to illustrate life course trajectories of a sample of individuals from
+the German Family Panel (pairfam) data. Data come from Raab and Struffolino (2022). Additional details and code can be found in the book and in the companion github page. 
+
+Prepare a 5 page max report in which you:
+1. Import the data in R and describe the distribution of life states using relevant sequence
+analysis tools, including tables, indexes and figures.
+2. Calculate life course dissimilarities in the data.
+3. Use a clustering methods to derive typical trajectories and describe groups
+
+```{r}
+## Load Required Packages
+library(haven)        # To read Stata files
+library(tidyverse)    # To enable loading of multiple packages and manipulation
+library(TraMineR)     # For sequence analysis
+library(RColorBrewer) # For color palettes
+library(cluster)      # For clusters
+```
+
+##A. Import the data in R and describe the distribution of life states using relevant sequence
+```{r}
+## Step 1.1: Import Data from Stata
+pairfam_raw <- read_dta("C:/Users/admin/OneDrive - London School of Hygiene and Tropical Medicine/‌INED 2024/Sequence analysis/Assignment/PartnerBirthbio.dta")
+# View structure and variable names
+#names(pairfam_raw)
+
+## Step 1.2: Recode Life States
+pairfam <- pairfam_raw %>%
+  select(id, weight40, starts_with("state")) %>% # Keep ID, weights, and state vars
+  mutate(across(starts_with("state"), ~ case_when(
+    . < 3 ~ 1,            # Single
+    . %in% c(3, 4) ~ 2,   # Living Apart Together (LAT)
+    . %in% c(5, 6) ~ 3,   # Cohabiting
+    . > 6 ~ 4             # Married
+  )))
+
+## Step 1.3: Define State Labels, Codes, and Colors
+pairfam.labels <- c("Single", "Living Apart Together", "Cohabiting", "Married")
+pairfam.scode  <- c("S", "LAT", "COH", "MAR")
+pairfam.colors <- brewer.pal(4, "Set1")  # Use 4 colors for 4 states
+pairfam$sex <- factor(pairfam_raw$sex, levels = c(0, 1), labels = c("Male", "Female"))
+
+## Step 1.4: Create Sequence Object
+# Identify sequence columns
+seq_columns <- which(names(pairfam) %in% paste0("state", 1:265)) 
+
+# Define sequence object
+pairfam.seq <- seqdef(pairfam,var = seq_columns,states = pairfam.scode,labels = pairfam.labels,
+                      weights = pairfam$weight40,id = pairfam$id,cpal = pairfam.colors)
+# Confirm definitions
+alphabet(pairfam.seq) #tell me possible alphabets
+stlab(pairfam.seq) #possible colours for representation
+
+# Step 1.5: Sequence Summary Plots: Frequency and distribution plots
+seqfplot(pairfam.seq, main = "Sequence Frequency Plot",with.legend = TRUE,legend.prop = 0.3,cex.legend= 1.0)
+seqdplot(pairfam.seq, main = "State Distribution Plot",with.legend = TRUE,legend.prop = 0.3,cex.legend= 1.0)
+
+# Plot distribution plots grouped by gender
+seqdplot(pairfam.seq, group = pairfam$sex,border = NA, space = 0, main = "Distribution Plot",with.legend = TRUE,legend.prop = 0.3,cex.legend= 0.8)
+
+## Step 1.6: Statistics and Distribution of Life States
+
+### First 10 Most Common Sequences
+seqtab(pairfam.seq, idxs = 1:10) # Shows top ten most common sequences
+
+### Mean Duration in each state
+state_codes <- c("S", "LAT", "COH", "MAR")
+pairfam.duration <- as.data.frame(seqistatd(pairfam.seq))
+pairfam.duration$sex <- pairfam$sex
+
+# Computed mean durations by gender
+mean_durations_by_gender <- pairfam.duration %>%
+  group_by(sex) %>%
+  summarise(across(all_of(state_codes), ~ mean(.x, na.rm = TRUE)))
+print(mean_durations_by_gender)
+
+# Mean time in each state by Gender
+seqmtplot(pairfam.seq, group = pairfam$sex, main = "Mean time", with.legend = TRUE,legend.prop = 0.3,cex.legend= 0.8)
+
+### Transition Matrix
+pairfam.trate <- seqtrate(pairfam.seq)
+round(pairfam.trate, 2)
+
+### Entropy Over Time
+entropy <- seqstatd(pairfam.seq)$Entropy
+plot(entropy,type = "l",col = "black",main = "Entropy of the State Distribution",
+     xlab = "Time (months)", ylab = "Entropy")
+
+### Sequence Turbulence
+turbulence <- seqST(pairfam.seq)
+hist(turbulence,col = "grey", main = "Histogram of Sequence Turbulence",
+     xlab = "State",ylab = "Sequence Turbulence")
+```
+**The most common sequence is Singlehood state and is followed by sequences that start with singlehood and transition to LAT, cohabitation and marriage On average, males spend 80.1 months in single state while females spend 48.3 months in single state. However, in marriage state, the males spend less time than females (88.4 months vs 120.0 months).On transitions,persons single have 98% chance of staying single. The 98% people stay in LAT state while 100% remain married.On theother hand, the 98% cohabiting are likely to keep in  same state.**
+
+##2. Calculate life course dissimilarities in the data.
+
+```{r}
+
+#Step 2.1: Compute dissimilarities using Optimal Matching (OM) with constant substitution costs
+
+pairfam.dist1 <- seqdist(pairfam.seq, method = "OM", indel = 1, sm = "CONSTANT")
+#pairfam.dist1[1:10, 1:10]
+
+#Step 2.2: Compute dissimilarities using Optimal Matching (OM) with transition rate substitution matrix
+submat <- seqsubm(pairfam.seq, method = "TRATE")
+pairfam.dist2 <- seqdist(pairfam.seq, method = "OM", indel = 1, sm = submat)
+#pairfam.dist2[1:10, 1:10]
+
+#Step 2.3: Compute dissimilarities using Optimal Matching (OM) with empirically derived insertion/deletion and substitution costs
+trcost <- seqcost(pairfam.seq, method="TRATE")
+pairfam.dist3=seqdist(pairfam.seq,method="OM",indel=trcost$indel,sm=trcost$sm)
+#pairfam.dist3[1:10,1:10]
+
+#Step 2.4: Compute dissimilarities using Longest Common Subsequence (LCS) and Dynamic Hamming Distance (DHD) Matrices
+dist.lcs=seqdist(pairfam.seq, method="LCS")
+dist.dhd=seqdist(pairfam.seq, method="DHD")
+
+#Step 2.5: Computed dissimilarity matrix
+dissimilarities <- list(OM_constant = pairfam.dist1,OM_trate = pairfam.dist2,
+  OM_seqcost = pairfam.dist3,LCS = dist.lcs,DHD = dist.dhd)
+
+#Step 2.6: Comparison of Dissimilarity matrices using Pairwise Correlation
+
+dissim_df <- data.frame(OM_constant = c(pairfam.dist1),OM_trate = c(pairfam.dist2),
+  OM_seqcost  = c(pairfam.dist3),LCS= c(dist.lcs),DHD= c(dist.dhd))
+cor(dissim_df)
+
+```
+**There is high correlation between OM,LCS and DHD. This implies similar results despite the method used.**
+
+##3. Use a clustering methods to derive typical trajectories and describe groups
+
+```{r}
+  # Step 3.1: Clustering using Ward's method
+pairfam.clusterward <- agnes(pairfam.dist3, diss = TRUE, method = "ward")
+plot(pairfam.clusterward, which.plots = 2, main = "Dendrogram of agnes", labels = FALSE)
+
+# Step 3.2: Chosing of 3 clusters
+pairfam.cl3 <- cutree(pairfam.clusterward, k = 3)
+
+# Step 3.3: Convert to factor and assign descriptive labels
+pairfam.cl3 <- factor(pairfam.cl3,levels = 1:3,
+                      labels = c("Mostly Single/Late Partn",
+                                 "Early Cohab/then Marr", 
+                                 "Mixed LAT/Less Marr")) #"Mostly Single/Late Partnership",
+                                 #"Early Cohabitation/then Marriage", "Mixed Living Apart Together/Less Marriage".
+
+# Step 3.4: Add cluster labels to your dataset
+pairfam$cluster_label <- pairfam.cl3
+
+#Step 3.5: Generate different cluster plots
+par(mar = c(5, 4, 4, 4))
+seqdplot(pairfam.seq, group = pairfam.cl3,
+         border = NA,space = 0)
+
+# Mean time spent in each state
+par(mar = c(5, 4, 4, 4))
+seqmtplot(pairfam.seq,group = pairfam.cl3,
+          border = NA, space = 0)
+```
+
+**Based on 3 clusters, a diverse life course trajectory in partnership formation is observed: stable singlehood or delayed partnership; early cohabitation leading to marriage; mixed living apart together and less marriage. The first cluster is dominated by singlehood sequence. The second cluster is largely dominated by early cohabitation and marriage in the longrun. Both early cohabiting and mixed LAT report partners staying long in marriage in the long run.**  
